@@ -44,7 +44,7 @@ outputJSONfilename = ''
 def shortHelp():
     print()
     print('   ./caddyLog.py -h -n <networkAddress> -i <inputJSONfilename> -t <timeInterval>')
-    print('                    -g <outputGoAccessFilename> -j <outputJSONfilename>')
+    print('                    -f <outputFormat> -g <outputGoAccessFilename> -j <outputJSONfilename>')
     print()
     print('   use ./caddyLog.py --help to obtain more comprehensive help')
     print()
@@ -52,7 +52,7 @@ def shortHelp():
 def longHelp():
     print()
     print('   ./caddyLog.py -h -n <networkAddress> -j <inputJSONfilename> -i <timeInterval>')
-    print('                    -g <outputGoAccessFilename> -o <outputJSONfilename>')
+    print('                    -f <outputFormat> -g <outputGoAccessFilename> -o <outputJSONfilename>')
     print()
     print('   Example(s)')
     print('   __________')
@@ -118,6 +118,12 @@ def longHelp():
     print('      will simply convert and output the existing Caddy log data and then terminate')
     print('      when it detects the input file EOF.')
     print()
+    print('   -f --outputFormat <format>')
+    print()
+    print('      Output format to use. Choices:')
+    print('        - Custom (default): custom format of this tool')
+    print('        - CLF: Common Log Format')
+    print()
     print('   -g --outputGoAccessFilename <filename>')
     print()
     print('      convert the Caddy log data from either the <inputJSONfilename> OR the TCP network')
@@ -149,11 +155,12 @@ def processArgs(argv):
     global networkAddress
     global inputJSONfilename
     global timeInterval
+    global outputFormat
     global outputGoAccessFilename
     global outputJSONfilename
 
     try:
-        opts, args = getopt.getopt(argv,"hn:i:t:g:j:", ["help", "networkAddress=", "inputJSONfilename=", "timeInterval=", "outputGoAccessFilename=", "outputJSONfilename="])
+        opts, args = getopt.getopt(argv,"hn:i:t:f:g:j:", ["help", "networkAddress=", "inputJSONfilename=", "timeInterval=", "outputFormat=","outputGoAccessFilename=", "outputJSONfilename="])
     except getopt.GetoptError:
         shortHelp()
         sys.exit(2)
@@ -169,6 +176,11 @@ def processArgs(argv):
             networkAddress = arg
         elif opt in ("-i", "--inputJSONfilename"):
             inputJSONfilename = arg
+        elif opt in ("-f", "--outputFormat"):
+            if arg not in ["Custom", "CLF"]:
+                logging.fatal(f"Invalid outputFormat: {arg}")
+                sys.exit(2)
+            outputFormat = arg
         elif opt in ("-g", "--outputGoAccessFilename"):
             outputGoAccessFilename = arg
         elif opt in ("-j", "--outputJSONfilename"):
@@ -212,11 +224,12 @@ def processArgs(argv):
         shortHelp()
         sys.exit(2)
 
-def convertJSONtoGoAccess (JSONdata):
-    ts = str(datetime.fromtimestamp(JSONdata['ts']))
-    date = ts[0:10]                                                             #d
-    time = ts[11:19]                                                            #t
+def convertJSONtoGoAccess (JSONdata, outputFormat):
+    date = datetime.fromtimestamp(JSONdata['ts'])
+
     virtualHost = JSONdata['request']['host']                                   #v
+    if ":" in virtualHost:
+        virtualHost = virtualHost[0:virtualHost.rindex(':')]
 
     # Caddy >= 2.5.0
     # "remote_ip": "127.0.0.1", "remote_port": "32984"
@@ -233,6 +246,8 @@ def convertJSONtoGoAccess (JSONdata):
         logging.warning(f"Skipping invalid record: {JSONdata}")
         return ""
 
+    user = JSONdata.get('user_id') or "-"
+
     method = JSONdata['request']['method']                                      #m
     uri = JSONdata['request']['uri']                                            #U
     proto = JSONdata['request']['proto']                                        #H
@@ -245,19 +260,23 @@ def convertJSONtoGoAccess (JSONdata):
         referer = JSONdata['request']['headers']['Referer'][0]
     else:
         referer = 'unknown'
-    
+
     if "User-Agent" in JSONdata['request']['headers'].keys():                   #u
         user_agent = '"'+JSONdata['request']['headers']['User-Agent'][0]+'"'
     else:
         user_agent = '""'
 
-    goAccessData = date+' '+time+' '+virtualHost+' '+host+' '+method+' '+uri+' '+proto+' '+status+' '+size+' '+latency+' '+referer+' '+user_agent
+    if outputFormat == "CLF":
+        goAccessData = f'{virtualHost} - {user} [{date.astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")}] "{method} {uri} {proto}" {status} {size}'
+    else:
+        goAccessData = f'date.strftime("%F %H:%M:%S") {virtualHost} {host} {method} {uri} {proto} {status} {size} {latency} {referer} {user_agent}'
     return goAccessData
 
 def main():
     global networkAddress
     global inputJSONfilename
     global timeInterval
+    global outputFormat
     global outputGoAccessFilename
     global outputJSONfilename
 
@@ -278,7 +297,7 @@ def main():
                             line = j.readline()
                             if (line != ""):
                                 JSONdata = json.loads(line)
-                                goAccessData = convertJSONtoGoAccess(JSONdata)
+                                goAccessData = convertJSONtoGoAccess(JSONdata, outputFormat)
                                 g.write(goAccessData+'\n')
                                 totalLogCount += 1
                                 batchLogCount += 1
@@ -334,7 +353,7 @@ def main():
                                     j.write(json.dumps(JSONdata)+'\n')
                                     j.flush()
                                 if (outputGoAccessFilename):
-                                    goAccessData = convertJSONtoGoAccess(JSONdata)
+                                    goAccessData = convertJSONtoGoAccess(JSONdata, outputFormat)
                                     g.write(goAccessData+'\n')
                                     g.flush()
                                 totalLogCount += 1
